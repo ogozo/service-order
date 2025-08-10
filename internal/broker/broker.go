@@ -71,6 +71,36 @@ func (b *Broker) PublishOrderCreated(event OrderCreatedEvent) error {
 	return nil
 }
 
+type OrderConfirmedEvent struct {
+	OrderID string `json:"order_id"`
+	UserID  string `json:"user_id"`
+}
+
+func (b *Broker) PublishOrderConfirmed(event OrderConfirmedEvent) error {
+	// Bu olay için ayrı bir exchange kullanmak, ilgilenen servislerin
+	// gereksiz yere diğer olayları dinlemesini engeller.
+	err := b.channel.ExchangeDeclare("order_confirmed_exchange", "fanout", true, false, false, false, nil)
+	if err != nil {
+		return fmt.Errorf("failed to declare order_confirmed_exchange: %w", err)
+	}
+
+	body, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("failed to marshal event: %w", err)
+	}
+
+	err = b.channel.Publish("order_confirmed_exchange", "", false, false, amqp.Publishing{
+		ContentType: "application/json",
+		Body:        body,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to publish message: %w", err)
+	}
+
+	log.Printf("✅ Published OrderConfirmed event for order %s", event.OrderID)
+	return nil
+}
+
 // --- CONSUMER BÖLÜMÜ ---
 
 type StockUpdateResultEvent struct {

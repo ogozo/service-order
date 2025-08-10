@@ -57,6 +57,23 @@ func (s *Service) HandleStockUpdateResultEvent(event broker.StockUpdateResultEve
 
 	err := s.repo.UpdateOrderStatus(context.Background(), event.OrderID, newStatus)
 	if err != nil {
-		log.Printf("CRITICAL: Failed to update order status for order %s to %s. Error: %v", event.OrderID, newStatus, err)
+		log.Printf("CRITICAL: Failed to update order status for order %s: %v", event.OrderID, err)
+		return
+	}
+
+	if event.Success {
+		order, err := s.repo.GetOrderByID(context.Background(), event.OrderID) // Bu metodu repository'e ekleyeceğiz.
+		if err != nil {
+			log.Printf("CRITICAL: Could not get order details to publish OrderConfirmed event for order %s: %v", event.OrderID, err)
+			return
+		}
+
+		confirmedEvent := broker.OrderConfirmedEvent{
+			OrderID: order.Id,
+			UserID:  order.UserId,
+		}
+		if err := s.publisher.PublishOrderConfirmed(confirmedEvent); err != nil {
+			log.Printf("CRITICAL: Failed to publish OrderConfirmed event for order %s: %v", event.OrderID, err)
+		}
 	}
 }

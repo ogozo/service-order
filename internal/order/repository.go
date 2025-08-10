@@ -76,3 +76,16 @@ func (r *Repository) UpdateOrderStatus(ctx context.Context, orderID string, stat
 	}
 	return nil
 }
+
+func (r *Repository) GetOrderByID(ctx context.Context, orderID string) (*pb.Order, error) {
+	var order pb.Order
+	query := `SELECT id, user_id, status FROM orders WHERE id = $1`
+	var statusFromDB string
+
+	err := r.db.QueryRow(ctx, query, orderID).Scan(&order.Id, &order.UserId, &statusFromDB)
+	if err != nil {
+		return nil, err
+	}
+	order.Status = pb.OrderStatus(pb.OrderStatus_value[statusFromDB])
+	return &order, nil
+}
