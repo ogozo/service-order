@@ -9,7 +9,6 @@ import (
 	"github.com/streadway/amqp"
 )
 
-// GENEL YAPI
 type Broker struct {
 	conn    *amqp.Connection
 	channel *amqp.Channel
@@ -38,7 +37,6 @@ func (b *Broker) Close() {
 	}
 }
 
-// --- PUBLISHER BÖLÜMÜ ---
 
 type OrderCreatedEvent struct {
 	OrderID    string          `json:"order_id"`
@@ -48,7 +46,6 @@ type OrderCreatedEvent struct {
 }
 
 func (b *Broker) PublishOrderCreated(event OrderCreatedEvent) error {
-	// Gerekli Exchange'i deklare edelim.
 	err := b.channel.ExchangeDeclare("orders_exchange", "fanout", true, false, false, false, nil)
 	if err != nil {
 		return fmt.Errorf("failed to declare an exchange: %w", err)
@@ -77,8 +74,6 @@ type OrderConfirmedEvent struct {
 }
 
 func (b *Broker) PublishOrderConfirmed(event OrderConfirmedEvent) error {
-	// Bu olay için ayrı bir exchange kullanmak, ilgilenen servislerin
-	// gereksiz yere diğer olayları dinlemesini engeller.
 	err := b.channel.ExchangeDeclare("order_confirmed_exchange", "fanout", true, false, false, false, nil)
 	if err != nil {
 		return fmt.Errorf("failed to declare order_confirmed_exchange: %w", err)
@@ -101,7 +96,6 @@ func (b *Broker) PublishOrderConfirmed(event OrderConfirmedEvent) error {
 	return nil
 }
 
-// --- CONSUMER BÖLÜMÜ ---
 
 type StockUpdateResultEvent struct {
 	OrderID string `json:"order_id"`
@@ -136,9 +130,9 @@ func (b *Broker) StartStockUpdateResultConsumer(handler func(event StockUpdateRe
 			var event StockUpdateResultEvent
 			if err := json.Unmarshal(d.Body, &event); err != nil {
 				log.Printf("Error unmarshalling StockUpdateResultEvent: %v", err)
-				continue // Bir sonraki mesaja geç
+				continue
 			}
-			handler(event) // Olayı işleyecek olan service katmanına gönder
+			handler(event)
 		}
 	}()
 

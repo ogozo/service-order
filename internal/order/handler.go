@@ -18,7 +18,6 @@ func NewHandler(service *Service) *Handler {
 }
 
 func (h *Handler) CreateOrder(ctx context.Context, req *pb.CreateOrderRequest) (*pb.CreateOrderResponse, error) {
-	// Gelen isteği alıp service katmanına iletiyoruz.
 	order, err := h.service.CreateOrder(ctx, req.UserId, req.Items)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "could not create order: %v", err)
