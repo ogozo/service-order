@@ -38,14 +38,14 @@ func (s *Service) CreateOrder(ctx context.Context, userID string, items []*pb.Or
 		TotalPrice: order.TotalPrice,
 		Items:      order.Items,
 	}
-	if err := s.publisher.PublishOrderCreated(event); err != nil {
+	if err := s.publisher.PublishOrderCreated(ctx, event); err != nil {
 		log.Printf("CRITICAL: Failed to publish OrderCreated event for order %s: %v", order.Id, err)
 	}
 
 	return order, nil
 }
 
-func (s *Service) HandleStockUpdateResultEvent(event broker.StockUpdateResultEvent) {
+func (s *Service) HandleStockUpdateResultEvent(ctx context.Context, event broker.StockUpdateResultEvent) {
 	var newStatus string
 	if event.Success {
 		newStatus = "CONFIRMED"
@@ -55,14 +55,14 @@ func (s *Service) HandleStockUpdateResultEvent(event broker.StockUpdateResultEve
 		log.Printf("❌ Order %s CANCELLED due to: %s", event.OrderID, event.Reason)
 	}
 
-	err := s.repo.UpdateOrderStatus(context.Background(), event.OrderID, newStatus)
+	err := s.repo.UpdateOrderStatus(ctx, event.OrderID, newStatus)
 	if err != nil {
 		log.Printf("CRITICAL: Failed to update order status for order %s: %v", event.OrderID, err)
 		return
 	}
 
 	if event.Success {
-		order, err := s.repo.GetOrderByID(context.Background(), event.OrderID) // Bu metodu repository'e ekleyeceğiz.
+		order, err := s.repo.GetOrderByID(ctx, event.OrderID)
 		if err != nil {
 			log.Printf("CRITICAL: Could not get order details to publish OrderConfirmed event for order %s: %v", event.OrderID, err)
 			return
@@ -72,7 +72,7 @@ func (s *Service) HandleStockUpdateResultEvent(event broker.StockUpdateResultEve
 			OrderID: order.Id,
 			UserID:  order.UserId,
 		}
-		if err := s.publisher.PublishOrderConfirmed(confirmedEvent); err != nil {
+		if err := s.publisher.PublishOrderConfirmed(ctx, confirmedEvent); err != nil {
 			log.Printf("CRITICAL: Failed to publish OrderConfirmed event for order %s: %v", event.OrderID, err)
 		}
 	}

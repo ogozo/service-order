@@ -1,17 +1,46 @@
 package broker
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 
 	pb "github.com/ogozo/proto-definitions/gen/go/order"
 	"github.com/streadway/amqp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace"
 )
+
+type TraceCarrier map[string]interface{}
+
+func (c TraceCarrier) Get(key string) string {
+	if val, ok := c[key]; ok {
+		if str, ok := val.(string); ok {
+			return str
+		}
+	}
+	return ""
+}
+
+func (c TraceCarrier) Set(key, val string) {
+	c[key] = val
+}
+
+func (c TraceCarrier) Keys() []string {
+	keys := make([]string, 0, len(c))
+	for k := range c {
+		keys = append(keys, k)
+	}
+	return keys
+}
 
 type Broker struct {
 	conn    *amqp.Connection
 	channel *amqp.Channel
+	tracer  trace.Tracer
 }
 
 func NewBroker(amqpURL string) (*Broker, error) {
@@ -19,13 +48,12 @@ func NewBroker(amqpURL string) (*Broker, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
 	}
-
 	channel, err := conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open a channel: %w", err)
 	}
-
-	return &Broker{conn: conn, channel: channel}, nil
+	tracer := otel.Tracer("service-order.broker")
+	return &Broker{conn: conn, channel: channel, tracer: tracer}, nil
 }
 
 func (b *Broker) Close() {
@@ -37,7 +65,6 @@ func (b *Broker) Close() {
 	}
 }
 
-
 type OrderCreatedEvent struct {
 	OrderID    string          `json:"order_id"`
 	UserID     string          `json:"user_id"`
@@ -45,22 +72,37 @@ type OrderCreatedEvent struct {
 	Items      []*pb.OrderItem `json:"items"`
 }
 
-func (b *Broker) PublishOrderCreated(event OrderCreatedEvent) error {
-	err := b.channel.ExchangeDeclare("orders_exchange", "fanout", true, false, false, false, nil)
+func (b *Broker) PublishOrderCreated(ctx context.Context, event OrderCreatedEvent) error {
+	exchangeName := "orders_exchange"
+	err := b.channel.ExchangeDeclare(exchangeName, "fanout", true, false, false, false, nil)
 	if err != nil {
 		return fmt.Errorf("failed to declare an exchange: %w", err)
 	}
+
+	spanCtx, span := b.tracer.Start(ctx, exchangeName+" publish", trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(
+			semconv.MessagingSystemRabbitmq,
+			semconv.MessagingDestinationName(exchangeName),
+		),
+	)
+	defer span.End()
 
 	body, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("failed to marshal event: %w", err)
 	}
 
-	err = b.channel.Publish("orders_exchange", "", false, false, amqp.Publishing{
+	headers := make(TraceCarrier)
+	otel.GetTextMapPropagator().Inject(spanCtx, headers)
+
+	err = b.channel.Publish(exchangeName, "", false, false, amqp.Publishing{
 		ContentType: "application/json",
 		Body:        body,
+		Headers:     amqp.Table(headers),
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to publish message")
 		return fmt.Errorf("failed to publish message: %w", err)
 	}
 
@@ -73,22 +115,37 @@ type OrderConfirmedEvent struct {
 	UserID  string `json:"user_id"`
 }
 
-func (b *Broker) PublishOrderConfirmed(event OrderConfirmedEvent) error {
-	err := b.channel.ExchangeDeclare("order_confirmed_exchange", "fanout", true, false, false, false, nil)
+func (b *Broker) PublishOrderConfirmed(ctx context.Context, event OrderConfirmedEvent) error {
+	exchangeName := "order_confirmed_exchange"
+	err := b.channel.ExchangeDeclare(exchangeName, "fanout", true, false, false, false, nil)
 	if err != nil {
 		return fmt.Errorf("failed to declare order_confirmed_exchange: %w", err)
 	}
+
+	spanCtx, span := b.tracer.Start(ctx, exchangeName+" publish", trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(
+			semconv.MessagingSystemRabbitmq,
+			semconv.MessagingDestinationName(exchangeName),
+		),
+	)
+	defer span.End()
 
 	body, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("failed to marshal event: %w", err)
 	}
 
-	err = b.channel.Publish("order_confirmed_exchange", "", false, false, amqp.Publishing{
+	headers := make(TraceCarrier)
+	otel.GetTextMapPropagator().Inject(spanCtx, headers)
+
+	err = b.channel.Publish(exchangeName, "", false, false, amqp.Publishing{
 		ContentType: "application/json",
 		Body:        body,
+		Headers:     amqp.Table(headers),
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to publish message")
 		return fmt.Errorf("failed to publish message: %w", err)
 	}
 
@@ -96,15 +153,15 @@ func (b *Broker) PublishOrderConfirmed(event OrderConfirmedEvent) error {
 	return nil
 }
 
-
 type StockUpdateResultEvent struct {
 	OrderID string `json:"order_id"`
 	Success bool   `json:"success"`
 	Reason  string `json:"reason,omitempty"`
 }
 
-func (b *Broker) StartStockUpdateResultConsumer(handler func(event StockUpdateResultEvent)) error {
-	err := b.channel.ExchangeDeclare("stock_update_exchange", "fanout", true, false, false, false, nil)
+func (b *Broker) StartStockUpdateResultConsumer(handler func(ctx context.Context, event StockUpdateResultEvent)) error {
+	exchangeName := "stock_update_exchange"
+	err := b.channel.ExchangeDeclare(exchangeName, "fanout", true, false, false, false, nil)
 	if err != nil {
 		return fmt.Errorf("failed to declare stock_update_exchange: %w", err)
 	}
@@ -114,7 +171,7 @@ func (b *Broker) StartStockUpdateResultConsumer(handler func(event StockUpdateRe
 		return fmt.Errorf("failed to declare a queue: %w", err)
 	}
 
-	err = b.channel.QueueBind(q.Name, "", "stock_update_exchange", false, nil)
+	err = b.channel.QueueBind(q.Name, "", exchangeName, false, nil)
 	if err != nil {
 		return fmt.Errorf("failed to bind a queue: %w", err)
 	}
@@ -126,13 +183,31 @@ func (b *Broker) StartStockUpdateResultConsumer(handler func(event StockUpdateRe
 
 	go func() {
 		for d := range msgs {
+			carrier := make(TraceCarrier)
+			for k, v := range d.Headers {
+				carrier[k] = v
+			}
+			parentCtx := otel.GetTextMapPropagator().Extract(context.Background(), carrier)
+
+			spanCtx, span := b.tracer.Start(parentCtx, exchangeName+" receive", trace.WithSpanKind(trace.SpanKindConsumer),
+				trace.WithAttributes(
+					semconv.MessagingSystemRabbitmq,
+					semconv.MessagingDestinationName(exchangeName),
+				),
+			)
+
 			log.Printf("📩 Received StockUpdateResult event: %s", d.Body)
 			var event StockUpdateResultEvent
 			if err := json.Unmarshal(d.Body, &event); err != nil {
 				log.Printf("Error unmarshalling StockUpdateResultEvent: %v", err)
+				span.RecordError(err)
+				span.SetStatus(codes.Error, "failed to unmarshal message")
+				span.End()
 				continue
 			}
-			handler(event)
+
+			handler(spanCtx, event)
+			span.End()
 		}
 	}()
 
