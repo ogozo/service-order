@@ -7,13 +7,15 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/exaring/otelpgx"
+	"github.com/jackc/pgx/v5/pgxpool"
 	pb "github.com/ogozo/proto-definitions/gen/go/order"
 	"github.com/ogozo/service-order/internal/broker"
 	"github.com/ogozo/service-order/internal/config"
 	"github.com/ogozo/service-order/internal/observability"
 	"github.com/ogozo/service-order/internal/order"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 )
 
@@ -41,12 +43,24 @@ func main() {
 	defer br.Close()
 	log.Println("RabbitMQ broker connected.")
 
-	dbpool, err := pgxpool.Connect(context.Background(), cfg.DatabaseURL)
+	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("failed to parse pgx config: %v", err)
+	}
+
+	poolConfig.ConnConfig.Tracer = otelpgx.NewTracer()
+
+	dbpool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		log.Fatalf("Unable to connect to database: %v", err)
 	}
 	defer dbpool.Close()
-	log.Println("Database connection successful for order service.")
+
+	if err := otelpgx.RecordStats(dbpool, otelpgx.WithStatsMeterProvider(otel.GetMeterProvider())); err != nil {
+		log.Printf("WARN: unable to record database stats: %v", err)
+	}
+
+	log.Println("Database connection successful for order service, with OTel instrumentation.")
 
 	orderRepo := order.NewRepository(dbpool)
 	orderService := order.NewService(orderRepo, br)
