@@ -12,6 +12,7 @@ type Config struct {
 	RabbitMQURL          string `mapstructure:"RABBITMQ_URL"`
 	OtelExporterEndpoint string `mapstructure:"OTEL_EXPORTER_OTLP_ENDPOINT"`
 	OtelServiceName      string `mapstructure:"OTEL_SERVICE_NAME"`
+	MetricsPort      string `mapstructure:"METRICS_PORT"`
 }
 
 var AppConfig *Config
