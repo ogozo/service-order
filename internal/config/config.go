@@ -1,6 +1,9 @@
 package config
 
 import (
+	"reflect"
+	"strings"
+
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 )
@@ -15,19 +18,28 @@ type OrderConfig struct {
 }
 
 func LoadConfig(cfg any) {
-	viper.AddConfigPath(".")
-	viper.SetConfigName(".env")
-	viper.SetConfigType("env")
-
 	viper.AutomaticEnv()
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
-	if err := viper.ReadInConfig(); err != nil {
-		tempLogger, _ := zap.NewProduction()
-		defer tempLogger.Sync()
-		tempLogger.Warn(".env file not found, reading from environment variables")
+	v := reflect.ValueOf(cfg).Elem()
+	t := v.Type()
+
+	for i := 0; i < v.NumField(); i++ {
+		field := t.Field(i)
+		envKey := field.Tag.Get("mapstructure")
+		if envKey == "" {
+			continue
+		}
+
+		err := viper.BindEnv(envKey)
+		if err != nil {
+			tempLogger, _ := zap.NewProduction()
+			defer tempLogger.Sync()
+			tempLogger.Fatal("Failed to bind env var", zap.String("key", envKey), zap.Error(err))
+		}
 	}
 
-	err := viper.Unmarshal(&cfg)
+	err := viper.Unmarshal(cfg)
 	if err != nil {
 		tempLogger, _ := zap.NewProduction()
 		defer tempLogger.Sync()

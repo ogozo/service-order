@@ -2,16 +2,19 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ogozo/proto-definitions/gen/go/order"
 	"github.com/ogozo/service-order/internal/broker"
 	"github.com/ogozo/service-order/internal/config"
+	"github.com/ogozo/service-order/internal/healthcheck"
 	"github.com/ogozo/service-order/internal/logging"
 	"github.com/ogozo/service-order/internal/observability"
 	internalOrder "github.com/ogozo/service-order/internal/order"
@@ -57,29 +60,33 @@ func main() {
 
 	startMetricsServer(logger, cfg.MetricsPort)
 
-	br, err := broker.NewBroker(cfg.RabbitMQURL)
-	if err != nil {
-		logger.Fatal("failed to create broker", zap.Error(err))
-	}
+	var br *broker.Broker
+	healthcheck.ConnectWithRetry(ctx, "RabbitMQ", 5, 2*time.Second, func() error {
+		var err error
+		br, err = broker.NewBroker(cfg.RabbitMQURL)
+		return err
+	})
 	defer br.Close()
-	logger.Info("RabbitMQ broker connected")
 
-	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
-	if err != nil {
-		logger.Fatal("failed to parse pgx config", zap.Error(err))
-	}
-	poolConfig.ConnConfig.Tracer = otelpgx.NewTracer()
-
-	dbpool, err := pgxpool.NewWithConfig(ctx, poolConfig)
-	if err != nil {
-		logger.Fatal("unable to connect to database", zap.Error(err))
-	}
+	var dbpool *pgxpool.Pool
+	healthcheck.ConnectWithRetry(ctx, "PostgreSQL", 5, 2*time.Second, func() error {
+		var err error
+		poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+		if err != nil {
+			return fmt.Errorf("failed to parse pgx config: %w", err)
+		}
+		poolConfig.ConnConfig.Tracer = otelpgx.NewTracer()
+		dbpool, err = pgxpool.NewWithConfig(ctx, poolConfig)
+		if err != nil {
+			return err
+		}
+		return dbpool.Ping(ctx)
+	})
 	defer dbpool.Close()
 
 	if err := otelpgx.RecordStats(dbpool, otelpgx.WithStatsMeterProvider(otel.GetMeterProvider())); err != nil {
 		logger.Error("unable to record database stats", zap.Error(err))
 	}
-	logger.Info("database connection successful, with OTel instrumentation")
 
 	orderRepo := internalOrder.NewRepository(dbpool)
 	orderService := internalOrder.NewService(orderRepo, br)
