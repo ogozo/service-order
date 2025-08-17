@@ -3,7 +3,6 @@ package observability
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -11,12 +10,13 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.34.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.25.0"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-func InitTracerProvider(ctx context.Context, serviceName, otlpEndpoint string) (func(context.Context) error, error) {
+func InitTracerProvider(ctx context.Context, serviceName, otlpEndpoint string, logger *zap.Logger) (func(context.Context) error, error) {
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
 			semconv.ServiceName(serviceName),
@@ -46,10 +46,12 @@ func InitTracerProvider(ctx context.Context, serviceName, otlpEndpoint string) (
 		sdktrace.WithSpanProcessor(bsp),
 	)
 	otel.SetTracerProvider(tracerProvider)
-
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
 
-	log.Printf("Tracer provider initialized for service '%s', exporting to %s", serviceName, otlpEndpoint)
+	logger.Info("Tracer provider initialized",
+		zap.String("service_name", serviceName),
+		zap.String("exporter_endpoint", otlpEndpoint),
+	)
 
 	return func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)

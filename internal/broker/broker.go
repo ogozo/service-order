@@ -4,14 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 
 	pb "github.com/ogozo/proto-definitions/gen/go/order"
+	"github.com/ogozo/service-order/internal/logging"
 	"github.com/streadway/amqp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.25.0"
 	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
 )
 
 type TraceCarrier map[string]interface{}
@@ -106,7 +107,7 @@ func (b *Broker) PublishOrderCreated(ctx context.Context, event OrderCreatedEven
 		return fmt.Errorf("failed to publish message: %w", err)
 	}
 
-	log.Printf("✅ Published OrderCreated event for order %s", event.OrderID)
+	logging.Info(spanCtx, "published OrderCreated event", zap.String("order_id", event.OrderID))
 	return nil
 }
 
@@ -149,7 +150,7 @@ func (b *Broker) PublishOrderConfirmed(ctx context.Context, event OrderConfirmed
 		return fmt.Errorf("failed to publish message: %w", err)
 	}
 
-	log.Printf("✅ Published OrderConfirmed event for order %s", event.OrderID)
+	logging.Info(spanCtx, "published OrderConfirmed event", zap.String("order_id", event.OrderID))
 	return nil
 }
 
@@ -196,10 +197,10 @@ func (b *Broker) StartStockUpdateResultConsumer(handler func(ctx context.Context
 				),
 			)
 
-			log.Printf("📩 Received StockUpdateResult event: %s", d.Body)
+			logging.Info(spanCtx, "received StockUpdateResult event", zap.String("body", string(d.Body)))
 			var event StockUpdateResultEvent
 			if err := json.Unmarshal(d.Body, &event); err != nil {
-				log.Printf("Error unmarshalling StockUpdateResultEvent: %v", err)
+				logging.Error(spanCtx, "failed to unmarshal StockUpdateResultEvent", err)
 				span.RecordError(err)
 				span.SetStatus(codes.Error, "failed to unmarshal message")
 				span.End()
@@ -211,6 +212,6 @@ func (b *Broker) StartStockUpdateResultConsumer(handler func(ctx context.Context
 		}
 	}()
 
-	log.Println("👂 Listening for StockUpdateResult events...")
+	logging.Info(context.Background(), "listening for StockUpdateResult events")
 	return nil
 }
